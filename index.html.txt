@@ -1,0 +1,696 @@
+<!DOCTYPE html>
+<html lang="ur">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>📡 P2P File Share - Reliable WebRTC</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;700&display=swap" rel="stylesheet">
+    <style>
+        body { font-family: 'Inter', sans-serif; }
+        .glass {
+            background: rgba(255, 255, 255, 0.05);
+            backdrop-filter: blur(10px);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+        }
+        .gradient-bg {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        }
+        .animate-pulse-slow {
+            animation: pulse 3s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+        }
+        @keyframes slideIn {
+            from { transform: translateY(20px); opacity: 0; }
+            to { transform: translateY(0); opacity: 1; }
+        }
+        .slide-in { animation: slideIn 0.5s ease-out; }
+        .progress-bar {
+            transition: width 0.3s ease;
+        }
+        .error-shake {
+            animation: shake 0.5s;
+        }
+        @keyframes shake {
+            0%, 100% { transform: translateX(0); }
+            25% { transform: translateX(-10px); }
+            75% { transform: translateX(10px); }
+        }
+    </style>
+</head>
+<body class="gradient-bg min-h-screen text-white overflow-x-hidden">
+
+    <!-- Error Toast -->
+    <div id="errorToast" class="fixed top-4 right-4 bg-red-500 text-white px-6 py-3 rounded-lg shadow-xl transform translate-x-full transition-transform duration-300 z-50 hidden">
+        <span id="errorMessage">Error!</span>
+    </div>
+
+    <!-- Header -->
+    <header class="p-6 text-center">
+        <h1 class="text-4xl md:text-5xl font-bold mb-2">📡 P2P File Share</h1>
+        <p class="text-lg opacity-90">Direct Browser-to-Browser • Secure & Fast</p>
+    </header>
+
+    <main class="container mx-auto px-4 max-w-4xl pb-12">
+        
+        <!-- Debug Info Panel -->
+        <div id="debugPanel" class="glass rounded-xl p-4 mb-4 text-xs font-mono hidden">
+            <div class="flex justify-between items-center mb-2">
+                <span class="font-bold">🔧 Debug Info:</span>
+                <button onclick="toggleDebug()" class="text-xs underline">Hide</button>
+            </div>
+            <div id="debugContent" class="space-y-1 opacity-80"></div>
+        </div>
+        <button onclick="toggleDebug()" id="showDebugBtn" class="text-xs underline opacity-50 mb-4">Show Debug Info</button>
+
+        <!-- Connection Setup Section -->
+        <div class="glass rounded-2xl p-6 mb-6 slide-in">
+            <div class="flex flex-col md:flex-row gap-4 items-center justify-between">
+                <div class="flex-1 w-full">
+                    <label class="block text-sm font-semibold mb-2">🔑 Aapka Peer ID:</label>
+                    <div class="flex gap-2">
+                        <input type="text" id="myPeerId" readonly 
+                            class="flex-1 bg-black/30 border border-white/20 rounded-lg px-4 py-2 text-mono text-yellow-300 text-sm">
+                        <button onclick="copyId()" class="bg-blue-600 hover:bg-blue-700 px-4 py-2 rounded-lg transition text-sm">
+                            📋 Copy
+                        </button>
+                    </div>
+                </div>
+                
+                <div class="flex-1 w-full">
+                    <label class="block text-sm font-semibold mb-2">🔗 Dost ka Peer ID:</label>
+                    <div class="flex gap-2">
+                        <input type="text" id="remotePeerId" placeholder="e.g., abc123xyz" 
+                            class="flex-1 bg-black/30 border border-white/20 rounded-lg px-4 py-2 text-white placeholder-gray-400 text-sm">
+                        <button onclick="connectToPeer()" class="bg-green-600 hover:bg-green-700 px-4 py-2 rounded-lg transition font-semibold text-sm">
+                            🔗 Connect
+                        </button>
+                    </div>
+                </div>
+            </div>
+            
+            <div id="connectionStatus" class="mt-4 text-center text-sm font-semibold p-2 rounded bg-black/20">
+                <span class="inline-block w-2 h-2 rounded-full bg-yellow-400 mr-2 animate-pulse"></span>
+                Initializing WebRTC...
+            </div>
+
+            <!-- TURN Server Status -->
+            <div id="turnStatus" class="mt-2 text-xs text-center opacity-70">
+                Checking TURN servers...
+            </div>
+        </div>
+
+        <!-- Connected Status -->
+        <div id="connectedPanel" class="hidden glass rounded-2xl p-6 mb-6 border-green-500/50 border-2">
+            <div class="flex items-center justify-between">
+                <div class="flex items-center gap-3">
+                    <div class="w-3 h-3 bg-green-400 rounded-full animate-pulse"></div>
+                    <span class="font-bold text-green-400">✅ Connected! Ready to transfer</span>
+                </div>
+                <button onclick="disconnect()" class="text-red-400 hover:text-red-300 text-sm underline">
+                    Disconnect
+                </button>
+            </div>
+        </div>
+
+        <!-- File Transfer Section -->
+        <div class="grid md:grid-cols-2 gap-6">
+            
+            <!-- Send Files -->
+            <div class="glass rounded-2xl p-6 slide-in" style="animation-delay: 0.1s">
+                <h2 class="text-2xl font-bold mb-4 flex items-center gap-2">
+                    📤 Send Files
+                    <span class="text-xs bg-blue-600 px-2 py-1 rounded">Sender</span>
+                </h2>
+                
+                <div id="dropZone" class="border-2 border-dashed border-white/30 rounded-xl p-8 text-center hover:border-white/60 transition cursor-pointer relative" 
+                     onclick="document.getElementById('fileInput').click()"
+                     ondrop="handleDrop(event)" 
+                     ondragover="handleDragOver(event)"
+                     ondragleave="handleDragLeave(event)">
+                    <input type="file" id="fileInput" multiple class="hidden" onchange="handleFileSelect(event)">
+                    <div class="text-5xl mb-2 transition-transform" id="dropIcon">📁</div>
+                    <p class="text-lg font-semibold">Click or Drop Files Here</p>
+                    <p class="text-sm opacity-70 mt-1">Any size • Multiple files • Secure</p>
+                </div>
+
+                <div id="sendQueue" class="mt-4 space-y-2 max-h-64 overflow-y-auto"></div>
+            </div>
+
+            <!-- Receive Files -->
+            <div class="glass rounded-2xl p-6 slide-in" style="animation-delay: 0.2s">
+                <h2 class="text-2xl font-bold mb-4 flex items-center gap-2">
+                    📥 Receive Files
+                    <span class="text-xs bg-purple-600 px-2 py-1 rounded">Receiver</span>
+                </h2>
+                
+                <div id="receiveArea" class="border-2 border-white/10 rounded-xl p-8 text-center min-h-[200px] flex flex-col items-center justify-center">
+                    <div class="text-5xl mb-2 opacity-50">📭</div>
+                    <p class="opacity-70">Waiting for files...</p>
+                    <p class="text-sm opacity-50 mt-2">Files will appear here automatically</p>
+                </div>
+
+                <div id="receivedFiles" class="mt-4 space-y-2 max-h-64 overflow-y-auto"></div>
+            </div>
+        </div>
+
+        <!-- Troubleshooting -->
+        <div class="mt-8 glass rounded-xl p-4 text-sm">
+            <h3 class="font-bold mb-2">⚠️ Connection Issues?</h3>
+            <ul class="list-disc list-inside space-y-1 opacity-80 text-xs">
+                <li>Both devices should use updated Chrome/Firefox/Edge</li>
+                <li>Try same WiFi network first (more reliable)</li>
+                <li>Disable VPN if connection fails</li>
+                <li>Mobile data + WiFi combo might not work (NAT issues)</li>
+                <li>Check browser console (F12) for detailed errors</li>
+            </ul>
+        </div>
+
+    </main>
+
+    <script>
+        // Global Variables
+        let peer;
+        let conn;
+        let myId;
+        let receivedBuffers = {};
+        let fileMetadata = {};
+        let retryCount = 0;
+        const MAX_RETRIES = 3;
+
+        // Multiple TURN/STUN servers for reliability
+        const iceServers = [
+            // Google's public STUN servers
+            { urls: 'stun:stun.l.google.com:19302' },
+            { urls: 'stun:stun1.l.google.com:19302' },
+            { urls: 'stun:stun2.l.google.com:19302' },
+            // Cloudflare STUN
+            { urls: 'stun:stun.cloudflare.com' },
+            // Open Relay (Free TURN - 50MB limit per day)
+            {
+                urls: 'turn:openrelay.metered.ca:80',
+                username: 'openrelayproject',
+                credential: 'openrelayproject'
+            },
+            {
+                urls: 'turn:openrelay.metered.ca:443',
+                username: 'openrelayproject',
+                credential: 'openrelayproject'
+            },
+            // Metered TURN (Free tier - 20GB/month) - Uncomment if you have credentials
+            // {
+            //     urls: 'turn:global.relay.metered.ca:80',
+            //     username: 'YOUR_METERED_USERNAME',
+            //     credential: 'YOUR_METERED_CREDENTIAL'
+            // }
+        ];
+
+        // Initialize PeerJS with better config
+        function initPeer() {
+            logDebug('Initializing PeerJS with TURN servers...');
+            
+            try {
+                peer = new Peer({
+                    config: {
+                        iceServers: iceServers,
+                        iceCandidatePoolSize: 10,
+                        iceTransportPolicy: 'all' // Try all routes
+                    },
+                    // Use public PeerJS cloud with fallback
+                    host: '0.peerjs.com',
+                    port: 443,
+                    secure: true,
+                    debug: 2, // 0: none, 1: errors, 2: warnings, 3: all
+                    // Connection reliability options
+                    reliable: true,
+                    serialization: 'binary'
+                });
+
+                setupPeerEvents();
+                
+            } catch (err) {
+                showError('Failed to initialize: ' + err.message);
+                logDebug('Init Error: ' + err.message);
+            }
+        }
+
+        function setupPeerEvents() {
+            peer.on('open', (id) => {
+                myId = id;
+                document.getElementById('myPeerId').value = id;
+                updateStatus('✅ Ready! Copy your ID and share', 'green');
+                document.getElementById('turnStatus').innerText = 'TURN servers configured: ' + iceServers.length + ' servers';
+                logDebug('Peer ID generated: ' + id);
+            });
+
+            peer.on('connection', (connection) => {
+                logDebug('Incoming connection from: ' + connection.peer);
+                conn = connection;
+                setupConnection();
+                document.getElementById('remotePeerId').value = connection.peer;
+            });
+
+            peer.on('error', (err) => {
+                console.error('Peer error:', err);
+                logDebug('Peer Error: ' + err.type + ' - ' + err.message);
+                
+                let userMsg = 'Connection error: ' + err.type;
+                
+                if (err.type === 'network') {
+                    userMsg = 'Network error. Check internet connection.';
+                } else if (err.type === 'peer-unavailable') {
+                    userMsg = 'Peer ID not found. Check the ID and try again.';
+                } else if (err.type === 'server-error') {
+                    userMsg = 'Signaling server error. Retrying...';
+                    if (retryCount < MAX_RETRIES) {
+                        retryCount++;
+                        setTimeout(initPeer, 2000);
+                        return;
+                    }
+                } else if (err.type === 'webrtc') {
+                    userMsg = 'WebRTC error. Try different network or browser.';
+                }
+                
+                showError(userMsg);
+                updateStatus('❌ ' + userMsg, 'red');
+            });
+
+            peer.on('disconnected', () => {
+                logDebug('Disconnected from signaling server');
+                updateStatus('⚠️ Disconnected from server. Reconnecting...', 'yellow');
+                peer.reconnect();
+            });
+
+            peer.on('close', () => {
+                logDebug('Peer connection closed');
+                updateStatus('🔴 Connection closed', 'red');
+            });
+        }
+
+        // Connect to another peer with retry logic
+        function connectToPeer() {
+            const remoteId = document.getElementById('remotePeerId').value.trim();
+            
+            if (!remoteId) {
+                showError('Please enter a Peer ID!');
+                return;
+            }
+
+            if (!peer || !peer.id) {
+                showError('Still initializing. Please wait...');
+                return;
+            }
+
+            logDebug('Attempting connection to: ' + remoteId);
+            updateStatus('🔗 Connecting to ' + remoteId + '...', 'yellow');
+
+            try {
+                conn = peer.connect(remoteId, {
+                    reliable: true,
+                    serialization: 'binary',
+                    metadata: { sender: peer.id }
+                });
+                
+                setupConnection();
+                
+            } catch (err) {
+                showError('Connection failed: ' + err.message);
+                logDebug('Connect Error: ' + err.message);
+            }
+        }
+
+        // Setup connection handlers with error recovery
+        function setupConnection() {
+            if (!conn) return;
+
+            conn.on('open', () => {
+                logDebug('Data connection opened with: ' + conn.peer);
+                document.getElementById('connectedPanel').classList.remove('hidden');
+                updateStatus('✅ Connected to ' + conn.peer, 'green');
+                showError(''); // Clear any errors
+                
+                // Send a test message
+                conn.send({ type: 'handshake', message: 'Hello from ' + peer.id });
+            });
+
+            conn.on('data', (data) => {
+                try {
+                    handleIncomingData(data);
+                } catch (err) {
+                    logDebug('Data handling error: ' + err.message);
+                }
+            });
+
+            conn.on('error', (err) => {
+                logDebug('Connection error: ' + err.message);
+                showError('Connection error occurred');
+            });
+
+            conn.on('close', () => {
+                logDebug('Connection closed');
+                document.getElementById('connectedPanel').classList.add('hidden');
+                updateStatus('🔴 Disconnected. Refresh to reconnect.', 'red');
+                conn = null;
+            });
+        }
+
+        function handleIncomingData(data) {
+            if (data.type === 'handshake') {
+                logDebug('Handshake received: ' + data.message);
+                return;
+            }
+            
+            if (data.type === 'file-start') {
+                receivedBuffers[data.fileId] = [];
+                fileMetadata[data.fileId] = data;
+                showReceivingFile(data);
+                logDebug('Receiving file: ' + data.fileName + ' (' + data.fileSize + ' bytes)');
+            } 
+            else if (data.type === 'file-chunk') {
+                receivedBuffers[data.fileId].push(data.chunk);
+                updateProgress(data.fileId, data.current, data.total);
+            } 
+            else if (data.type === 'file-end') {
+                logDebug('File transfer complete: ' + fileMetadata[data.fileId].fileName);
+                assembleFile(data.fileId);
+            } 
+            else if (data.type === 'text') {
+                showReceivedText(data.content);
+            }
+        }
+
+        // File handling functions
+        async function handleFileSelect(event) {
+            const files = event.target.files;
+            if (!files.length) return;
+            
+            if (!conn || !conn.open) {
+                showError('❌ Not connected! Connect first.');
+                document.getElementById('dropZone').classList.add('error-shake');
+                setTimeout(() => document.getElementById('dropZone').classList.remove('error-shake'), 500);
+                return;
+            }
+
+            for (const file of files) {
+                if (file.size > 2 * 1024 * 1024 * 1024) { // 2GB limit
+                    showError('File too large: ' + file.name);
+                    continue;
+                }
+                await sendFile(file);
+            }
+            
+            event.target.value = '';
+        }
+
+        async function sendFile(file) {
+            const fileId = Date.now() + Math.random().toString(36).substr(2, 9);
+            const chunkSize = 64 * 1024; // 64KB chunks (better for large files)
+            const totalChunks = Math.ceil(file.size / chunkSize);
+            
+            // Add to UI
+            const queueItem = createSendQueueItem(fileId, file.name, file.size);
+            document.getElementById('sendQueue').appendChild(queueItem);
+
+            try {
+                // Send metadata
+                conn.send({
+                    type: 'file-start',
+                    fileId: fileId,
+                    fileName: file.name,
+                    fileSize: file.size,
+                    fileType: file.type,
+                    totalChunks: totalChunks
+                });
+
+                // Read file
+                const buffer = await file.arrayBuffer();
+                
+                // Send chunks with flow control
+                for (let i = 0; i < totalChunks; i++) {
+                    const start = i * chunkSize;
+                    const end = Math.min(start + chunkSize, buffer.byteLength);
+                    const chunk = buffer.slice(start, end);
+                    
+                    // Check connection still open
+                    if (!conn || !conn.open) {
+                        throw new Error('Connection lost during transfer');
+                    }
+                    
+                    conn.send({
+                        type: 'file-chunk',
+                        fileId: fileId,
+                        chunk: chunk,
+                        current: i + 1,
+                        total: totalChunks
+                    });
+
+                    // Update progress
+                    const progress = ((i + 1) / totalChunks) * 100;
+                    updateSendProgress(fileId, progress);
+                    
+                    // Small delay every 10 chunks to prevent buffer overflow
+                    if (i % 10 === 0) {
+                        await new Promise(r => setTimeout(r, 10));
+                    }
+                }
+
+                // Send completion
+                conn.send({ type: 'file-end', fileId: fileId });
+                
+                markSendComplete(fileId);
+                logDebug('File sent successfully: ' + file.name);
+                
+            } catch (err) {
+                showError('Send failed: ' + err.message);
+                logDebug('Send error: ' + err.message);
+                queueItem.remove();
+            }
+        }
+
+        // UI Helper functions
+        function createSendQueueItem(fileId, name, size) {
+            const div = document.createElement('div');
+            div.id = `send-${fileId}`;
+            div.className = 'bg-black/30 rounded-lg p-3 flex items-center gap-3';
+            div.innerHTML = `
+                <div class="text-2xl">📄</div>
+                <div class="flex-1 min-w-0">
+                    <div class="font-semibold text-sm truncate">${escapeHtml(name)}</div>
+                    <div class="text-xs opacity-70">${formatBytes(size)}</div>
+                    <div class="w-full bg-gray-700 rounded-full h-2 mt-2">
+                        <div class="progress-bar bg-blue-500 h-2 rounded-full" style="width: 0%"></div>
+                    </div>
+                </div>
+                <div class="text-xs font-mono" id="status-${fileId}">0%</div>
+            `;
+            return div;
+        }
+
+        function updateSendProgress(fileId, percent) {
+            const item = document.getElementById(`send-${fileId}`);
+            if (item) {
+                item.querySelector('.progress-bar').style.width = `${percent}%`;
+                document.getElementById(`status-${fileId}`).innerText = `${Math.round(percent)}%`;
+            }
+        }
+
+        function markSendComplete(fileId) {
+            const status = document.getElementById(`status-${fileId}`);
+            if (status) {
+                status.innerText = '✅ Sent';
+                status.classList.add('text-green-400');
+            }
+            setTimeout(() => {
+                const item = document.getElementById(`send-${fileId}`);
+                if (item) item.remove();
+            }, 3000);
+        }
+
+        function assembleFile(fileId) {
+            const chunks = receivedBuffers[fileId];
+            const metadata = fileMetadata[fileId];
+            
+            if (!chunks || !metadata) return;
+
+            try {
+                // Combine chunks
+                const totalLength = chunks.reduce((acc, chunk) => acc + chunk.byteLength, 0);
+                const combined = new Uint8Array(totalLength);
+                let offset = 0;
+                
+                for (const chunk of chunks) {
+                    combined.set(new Uint8Array(chunk), offset);
+                    offset += chunk.byteLength;
+                }
+
+                // Create download
+                const blob = new Blob([combined], { type: metadata.fileType });
+                const url = URL.createObjectURL(blob);
+                
+                const fileItem = document.createElement('div');
+                fileItem.className = 'bg-green-500/20 border border-green-500/50 rounded-lg p-3 flex items-center gap-3 slide-in';
+                fileItem.innerHTML = `
+                    <div class="text-2xl">📥</div>
+                    <div class="flex-1 min-w-0">
+                        <div class="font-semibold text-sm truncate">${escapeHtml(metadata.fileName)}</div>
+                        <div class="text-xs opacity-70">${formatBytes(metadata.fileSize)}</div>
+                    </div>
+                    <a href="${url}" download="${escapeHtml(metadata.fileName)}" 
+                       class="bg-green-600 hover:bg-green-700 px-3 py-1 rounded text-sm transition whitespace-nowrap">
+                        ⬇️ Download
+                    </a>
+                `;
+                
+                document.getElementById('receivedFiles').prepend(fileItem);
+                document.getElementById('receiveArea').style.display = 'none';
+                
+                // Cleanup memory
+                delete receivedBuffers[fileId];
+                delete fileMetadata[fileId];
+                
+            } catch (err) {
+                logDebug('File assembly error: ' + err.message);
+                showError('Failed to reconstruct file');
+            }
+        }
+
+        // Drag and drop handlers
+        function handleDragOver(e) {
+            e.preventDefault();
+            e.currentTarget.classList.add('border-white', 'bg-white/10');
+            document.getElementById('dropIcon').style.transform = 'scale(1.2)';
+        }
+
+        function handleDragLeave(e) {
+            e.currentTarget.classList.remove('border-white', 'bg-white/10');
+            document.getElementById('dropIcon').style.transform = 'scale(1)';
+        }
+
+        function handleDrop(e) {
+            e.preventDefault();
+            e.currentTarget.classList.remove('border-white', 'bg-white/10');
+            document.getElementById('dropIcon').style.transform = 'scale(1)';
+            
+            const files = e.dataTransfer.files;
+            if (files.length > 0) {
+                handleFileSelect({ target: { files: files } });
+            }
+        }
+
+        // Utility functions
+        function copyId() {
+            const id = document.getElementById('myPeerId');
+            id.select();
+            document.execCommand('copy');
+            
+            const btn = event.target;
+            const original = btn.innerText;
+            btn.innerText = '✅ Copied!';
+            setTimeout(() => btn.innerText = original, 2000);
+        }
+
+        function disconnect() {
+            if (conn) {
+                conn.close();
+                conn = null;
+            }
+            document.getElementById('connectedPanel').classList.add('hidden');
+            updateStatus('Disconnected. Ready to connect again.', 'yellow');
+        }
+
+        function updateStatus(text, color) {
+            const status = document.getElementById('connectionStatus');
+            const colors = {
+                green: 'bg-green-500',
+                yellow: 'bg-yellow-500',
+                red: 'bg-red-500'
+            };
+            status.innerHTML = `<span class="inline-block w-2 h-2 rounded-full ${colors[color] || 'bg-gray-500'} mr-2 animate-pulse"></span>${text}`;
+        }
+
+        function showError(msg) {
+            const toast = document.getElementById('errorToast');
+            const errorText = document.getElementById('errorMessage');
+            
+            if (!msg) {
+                toast.classList.add('hidden');
+                return;
+            }
+            
+            errorText.innerText = msg;
+            toast.classList.remove('hidden');
+            toast.classList.remove('translate-x-full');
+            
+            setTimeout(() => {
+                toast.classList.add('translate-x-full');
+                setTimeout(() => toast.classList.add('hidden'), 300);
+            }, 5000);
+        }
+
+        function showReceivingFile(metadata) {
+            const area = document.getElementById('receiveArea');
+            area.innerHTML = `
+                <div class="animate-pulse">
+                    <div class="text-3xl mb-2">📥</div>
+                    <div class="text-green-400 font-semibold">Receiving...</div>
+                    <div class="text-xs opacity-70">${escapeHtml(metadata.fileName)}</div>
+                </div>
+            `;
+        }
+
+        function showReceivedText(text) {
+            const item = document.createElement('div');
+            item.className = 'bg-blue-500/20 rounded-lg p-3 text-sm';
+            item.innerText = '💬 ' + escapeHtml(text);
+            document.getElementById('receivedFiles').prepend(item);
+        }
+
+        function escapeHtml(text) {
+            const div = document.createElement('div');
+            div.innerText = text;
+            return div.innerHTML;
+        }
+
+        function formatBytes(bytes) {
+            if (bytes === 0) return '0 Bytes';
+            const k = 1024;
+            const sizes = ['Bytes', 'KB', 'MB', 'GB'];
+            const i = Math.floor(Math.log(bytes) / Math.log(k));
+            return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
+        }
+
+        // Debug panel
+        function logDebug(msg) {
+            const content = document.getElementById('debugContent');
+            const time = new Date().toLocaleTimeString();
+            content.innerHTML += `<div>[${time}] ${escapeHtml(msg)}</div>`;
+            content.scrollTop = content.scrollHeight;
+            console.log('[P2P]', msg);
+        }
+
+        function toggleDebug() {
+            const panel = document.getElementById('debugPanel');
+            const btn = document.getElementById('showDebugBtn');
+            
+            if (panel.classList.contains('hidden')) {
+                panel.classList.remove('hidden');
+                btn.classList.add('hidden');
+            } else {
+                panel.classList.add('hidden');
+                btn.classList.remove('hidden');
+            }
+        }
+
+        // Initialize
+        window.onload = () => {
+            initPeer();
+            
+            // Global error handler
+            window.onerror = (msg, url, line) => {
+                logDebug('Global error: ' + msg + ' (Line ' + line + ')');
+                return false;
+            };
+        };
+    </script>
+</body>
+</html>
